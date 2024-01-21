@@ -1,0 +1,16 @@
+[package]
+name = "riostu"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+smol = "2.0.0"
+pin-project-lite = "0.2.13"
+isahc = "1.7.2"
+zip = "0.6.6"
+
+[patch.crates-io.zip]
+git = "https://github.com/haxsam/zip-rs"
+branch = "fix_slow_cdes_read"
