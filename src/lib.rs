@@ -1,4 +1,7 @@
+mod error;
+
 use std::io::SeekFrom;
+use std::io::{Read, Seek};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -7,7 +10,9 @@ use isahc::{AsyncBody, Request, ResponseFuture};
 use smol::future::FutureExt;
 use smol::io::{AsyncRead, AsyncSeek};
 
-pub struct Blank {
+use error::RemoteIoError;
+
+pub struct RemoteIO {
     url: Box<str>,
     content_size: u64,
     pos: u64,
@@ -40,24 +45,36 @@ impl From<isahc::Response<AsyncBody>> for Status {
     }
 }
 
-impl Blank {
-    pub fn new(url: &str) -> Option<Self> {
-        let head = isahc::head(url).ok()?;
-        let _ = head.headers().get("Accept-Ranges")?;
+impl RemoteIO {
+    pub fn new(url: &str) -> Result<Self, RemoteIoError> {
+        let head = isahc::head(url)?;
+        let _ = head
+            .headers()
+            .get("Accept-Ranges")
+            .ok_or(RemoteIoError::NotSeekable)?;
         let content_size: u64 = head
             .headers()
-            .get("Content-Length")?
+            .get("Content-Length")
+            .ok_or(RemoteIoError::NoContentSize)?
             .to_str()
-            .ok()?
+            .expect("Couldn't convert content-size to str")
             .parse()
-            .ok()?;
+            .expect("Couldn't parse content-size to u64");
 
-        Some(Blank {
+        Ok(RemoteIO {
             url: url.into(),
             content_size,
             pos: 0,
             status: Status::None,
         })
+    }
+
+    pub fn wait(self) -> impl Read + Seek {
+        Self::block(self)
+    }
+
+    pub fn block(blank: Self) -> impl Read + Seek {
+        smol::io::BlockOn::new(blank)
     }
 
     fn create_request(&self, size: u64) -> Request<&str> {
@@ -66,13 +83,9 @@ impl Blank {
             .body("")
             .unwrap()
     }
-
-    pub fn make_sync(blank: Self) -> impl std::io::Read + std::io::Seek {
-        smol::io::BlockOn::new(blank)
-    }
 }
 
-impl AsyncRead for Blank {
+impl AsyncRead for RemoteIO {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -108,7 +121,7 @@ impl AsyncRead for Blank {
     }
 }
 
-impl AsyncSeek for Blank {
+impl AsyncSeek for RemoteIO {
     fn poll_seek(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -127,32 +140,35 @@ impl AsyncSeek for Blank {
 #[cfg(test)]
 mod tests {
     use super::*;
-    static T: &str =
+    static TEST_URL: &str =
         "https://oxygenos.oneplus.net/OnePlus8TOxygen_15.E.29_OTA_0290_all_2110091931_downgrade";
 
     #[test]
-    fn lel() {
-        let b = Blank::new(T);
-        eprintln!("{}", b.unwrap().content_size);
+    fn rio_creation() {
+        let rio = RemoteIO::new(TEST_URL);
+        eprintln!("{}", rio.unwrap().content_size);
     }
 
     #[test]
-    fn read() {
-        let b = Blank::new(T).unwrap();
+    fn read_bytes() {
+        use std::io::Read;
+
+        let rio = RemoteIO::new(TEST_URL).unwrap();
         let mut buf = vec![0u8; 1024];
-        let mut t = smol::io::BlockOn::new(b);
-        t.read_exact(&mut buf).unwrap();
-        eprintln!("{}", buf.len());
+        let mut rio_sync = RemoteIO::block(rio);
+
+        rio_sync.read_exact(&mut buf).unwrap();
     }
 
     #[test]
-    fn try_read_zip() {
+    fn read_zip() {
+        use std::io::BufReader;
         use zip::ZipArchive;
-        let b = Blank::new(T).unwrap();
-        let u = Blank::make_sync(b);
-        let u = std::io::BufReader::new(u);
 
-        let mut zip = ZipArchive::new(u).unwrap();
+        let rio = RemoteIO::new(TEST_URL).unwrap();
+        let buf_reader = BufReader::new(rio.wait());
+
+        let mut zip = ZipArchive::new(buf_reader).unwrap();
         for i in 0..zip.len() {
             let file = zip.by_index(i).unwrap();
             eprintln!("File Name: {}, size: {}", file.name(), file.size())
@@ -162,14 +178,16 @@ mod tests {
     #[allow(dead_code)]
     fn save_zip() {
         use smol::fs::File;
+        use smol::io::{self, BufReader, BufWriter};
+
         smol::block_on(async {
-            let b = Blank::new(T).unwrap();
+            let rio = RemoteIO::new(TEST_URL).unwrap();
             let file = File::create("test.zip").await.unwrap();
 
-            let b = smol::io::BufReader::new(b);
-            let file = smol::io::BufWriter::new(file);
+            let rio = BufReader::new(rio);
+            let file = BufWriter::new(file);
 
-            smol::io::copy(b, file).await.unwrap();
+            io::copy(rio, file).await.unwrap();
         })
     }
 }

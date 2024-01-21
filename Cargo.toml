@@ -5,12 +5,19 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[dev-dependencies]
+criterion = "0.5.1"
+zip = "0.6.6"
+
 [dependencies]
 smol = "2.0.0"
-pin-project-lite = "0.2.13"
 isahc = "1.7.2"
-zip = "0.6.6"
+thiserror = "1.0.56"
 
 [patch.crates-io.zip]
 git = "https://github.com/haxsam/zip-rs"
 branch = "fix_slow_cdes_read"
+
+[[bench]]
+name = "riostu_bench"
+harness = false
